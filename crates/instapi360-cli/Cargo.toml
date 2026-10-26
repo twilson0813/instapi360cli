@@ -25,6 +25,7 @@ login = ["dep:chromiumoxide", "dep:futures"]
 [dependencies]
 instapi360-cloud = { path = "../instapi360-cloud", version = "0.1.0" }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "io-util", "fs", "time"] }
+time = { workspace = true, features = ["macros"] }
 clap = { workspace = true }
 anyhow = { workspace = true }
 indicatif = { workspace = true }

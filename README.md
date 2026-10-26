@@ -5,6 +5,13 @@ own** Insta360 cloud media from the command line: sign in with your existing
 session, list your uploads, and download the **original** camera files
 (360 `.insv` + `.lrv` proxy, flat `.mp4`) for local editing and archival.
 
+> **Based on [sunsided/instapi360](https://github.com/sunsided/instapi360)**
+> by Markus Mayer, used under the MIT/Apache-2.0 license. This repository is an
+> independent continuation that makes the cloud API work against live accounts
+> (correct per-region host + platform selection), adds shoot-date range
+> filtering, a size-estimating dry run, oldest-first ordering, and an
+> interactive bash UI. See [CHANGES.md](CHANGES.md) for the full list.
+
 > **Not affiliated with Insta360.** This project is an independent, unofficial
 > tool. It is **not** affiliated with, endorsed by, sponsored by, or connected
 > to Insta360 or Arashivision. "Insta360", "Ace Pro", "X5" and related names are
@@ -47,6 +54,52 @@ instapi360 download all --out ./footage --resume
 instapi360 refresh        # or let commands auto-renew when near expiry
 ```
 
+## Date-range filtering
+
+`list` and `download all` take `--since` / `--until` to select media by **shoot
+date** (when the footage was recorded — matches the filename, not the cloud
+upload time). Dates are `YYYY-MM-DD` (UTC, inclusive) or a relative age:
+`7d`, `12h`, `3w` (= "7 days ago", etc.).
+
+```sh
+# everything shot in October 2026
+instapi360 list --all --since 2026-10-01 --until 2026-10-31
+
+# download a single day's footage to a Samba share
+instapi360 download all --out /Volumes/Share/Insta360 --resume \
+  --since 2026-08-30 --until 2026-08-30
+
+# everything from the last two weeks
+instapi360 download all --out ./footage --resume --since 2w
+```
+
+`download all` downloads **oldest → newest** by shoot time, so a long run fills
+in chronologically.
+
+### Preview before a big pull
+`--dry-run` lists exactly what would download, with per-item and total size
+(resolved from the API), without downloading anything — handy for sizing a share:
+
+```sh
+instapi360 download all --since 2026-08-30 --until 2026-08-30 --dry-run --out ./x
+# …
+# Total: 94.7 GB across 10 item(s)
+```
+
+## Interactive menu (bash UI)
+
+For a point-and-pick workflow, `instapi360-ui` wraps the CLI with a menu:
+who-am-I, list, set a date range, set the output directory (local or a mounted
+Samba share), estimate size (dry run), and download with resume.
+
+```sh
+instapi360-ui
+```
+
+It finds the `instapi360` binary on `PATH`, or at `~/instapi360` /
+`~/.cargo/bin/instapi360`; override with `INSTAPI360_BIN=/path/to/instapi360`.
+Set a default output dir with `INSTAPI360_OUT=/Volumes/Share/Insta360`.
+
 The `login` command is behind the **`login`** cargo feature, **on by default**.
 It pulls a Chrome-automation dependency; for a lean, token-import-only build:
 `cargo build --no-default-features`.
@@ -83,13 +136,26 @@ The token lasts ~30 days and **renews itself**: `whoami`, `list` and `download`
 auto-renew it when it's within a few days of expiring, and `instapi360 refresh`
 renews on demand. So `login` is a once-in-a-while action, not per-use.
 
-### Signing out
-Delete the stored session to sign out:
-```sh
-rm ~/.config/instapi360/session.json
-```
+### Where the session is stored
+The session JSON lives in your OS config dir:
+- macOS: `~/Library/Application Support/com.instapi360.instapi360/session.json`
+- Linux: `~/.config/instapi360/session.json`
+
+Delete that file to sign out.
 
 ### Troubleshooting
+- **`403 "没有权益"` ("no entitlement") on `list`/`download`** — almost always
+  the wrong **region host** for your account (see "Region & platform"). Let
+  `--region auto` detect it from your token, or set `--region` explicitly. It is
+  *not* usually a subscription problem.
+- **`list`/`download` find nothing for a date range** — filtering is by
+  `shootTime`; confirm you actually have footage in that range with
+  `instapi360 list --all` (dates are shown per item). A `--dry-run` also lists
+  exactly what matches.
+- **`command not found: instapi360`** after installing — your shell cached the
+  miss; run `hash -r` or open a new terminal.
+- **`is a directory` from the bash UI** — point it at the binary explicitly:
+  `INSTAPI360_BIN=/path/to/instapi360 ./instapi360-ui`.
 - **`oneshot canceled` / no window** — usually an outdated Chrome-automation
   stack against a very new Chrome. Update the toolchain (`cargo update`) and
   ensure Chrome/Chromium is current.
@@ -105,13 +171,42 @@ rm ~/.config/instapi360/session.json
   auto-renew when the token is within a few days of expiring, so a single
   import keeps working indefinitely.
 - The sign-in endpoint is reCAPTCHA-gated, so a headless credential POST won't
-  work. `login` therefore drives a **real browser** (via the Chrome DevTools
-  Protocol): you sign in and solve any challenge, and the session token is read
-  back from the page and stored. `import-token` is the manual alternative.
+  work. The practical way to get a token is to read the **`insta_access_token`
+  cookie** from a browser signed in at `cloud.insta360.com` and feed it to
+  `import-token`. (The optional `login` command drives a real browser via the
+  Chrome DevTools Protocol, but cookie import is simpler and always works.)
 - Listing and download resolution are authenticated GET requests. Downloads
   resolve to short-lived CDN URLs and stream with **resumable, ranged**
   transfers; multi-file media (video + proxy, or dual-lens parts) are grouped
   and saved together as one asset.
+
+### Region & platform (important)
+The cloud media API (`/cloud/service/*`) is served from a **data-center host
+tied to your account's region**, and a request only succeeds on the host that
+owns your data — the others reject with `403 "没有权益"` ("no entitlement"),
+which is misleading because it looks like a subscription problem. The region is
+read from your session token's `userRegion` claim and maps to:
+
+| Region | `userRegion` | cloud host |
+|--------|:---:|------------|
+| US / Americas | `2` | `service-va.insta360.com` |
+| EU / OverSea | `1` | `service-fra.insta360.com` |
+| APAC / Singapore | `3` | `service-sg.insta360.com` |
+| Mainland China | `0` | `service.insta360.com` |
+
+`--region auto` (the default) picks this from your token; override with
+`--region us|eu|apac|cn` if detection is ever wrong.
+
+The API also validates the `x-insta360-platform` header against a desktop
+client value — the CLI sends `pc/mac` on macOS and `pc/windows` elsewhere,
+chosen automatically by the host OS. Values like `web`/`ios`/`android` are
+rejected on these hosts.
+
+### Dates
+Date filtering uses the item's **`shootTime`** (when the footage was recorded),
+not its cloud-upload time, so ranges line up with the clip filenames.
+`shootTime` is stored in UTC; near-midnight clips at the very edge of a range
+may fall on the adjacent UTC day, so pad by a day if you need to be exact.
 
 ## Design
 `instapi360-cloud` is deliberately dependency-light and platform-agnostic

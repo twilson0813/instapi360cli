@@ -111,6 +111,28 @@ impl Client {
             put("X-User-Token", &s.user_token)?;
         }
 
+        // Debug: dump the outgoing header set (auth value redacted) so a run
+        // with `-v` reveals exactly what the client sends vs. the web UI.
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let dumped: Vec<String> = h
+                .iter()
+                .map(|(k, v)| {
+                    let name = k.as_str();
+                    let val = v.to_str().unwrap_or("<binary>");
+                    let shown = if matches!(
+                        name.to_ascii_lowercase().as_str(),
+                        "authentication" | "x-user-token" | "authorization"
+                    ) {
+                        redact_token(val)
+                    } else {
+                        val.to_string()
+                    };
+                    format!("{name}: {shown}")
+                })
+                .collect();
+            tracing::debug!(headers = %dumped.join(" | "), "request headers");
+        }
+
         Ok(h)
     }
 
@@ -124,16 +146,25 @@ impl Client {
         body: Option<Value>,
     ) -> Result<T> {
         let headers = self.build_headers(session)?;
+        tracing::debug!(%method, %url, query = ?query, "api request");
         let mut req = self.http.request(method, url).headers(headers);
         if !query.is_empty() {
             req = req.query(query);
         }
-        if let Some(b) = body {
-            req = req.json(&b);
+        if let Some(b) = &body {
+            tracing::debug!(body = %b, "api request body");
+            req = req.json(b);
         }
         let resp = req.send().await?;
         let status = resp.status();
+        let resp_headers = resp.headers().clone();
         let text = resp.text().await?;
+        tracing::debug!(
+            status = %status,
+            resp_headers = ?resp_headers,
+            body = %text.chars().take(2000).collect::<String>(),
+            "api response"
+        );
 
         if status == reqwest::StatusCode::UNAUTHORIZED {
             return Err(Error::Auth(format!("401 from {url}")));
@@ -263,6 +294,15 @@ impl Client {
 
 // ----- lenient JSON parsers (shapes vary across API versions) -----
 
+/// Show only the first/last few chars of a secret for debug logs.
+fn redact_token(tok: &str) -> String {
+    let n = tok.len();
+    if n <= 16 {
+        return "<redacted>".into();
+    }
+    format!("{}…{} ({} chars)", &tok[..8], &tok[n - 6..], n)
+}
+
 fn as_u64(v: &Value, keys: &[&str]) -> Option<u64> {
     for k in keys {
         if let Some(n) = v.get(k) {
@@ -300,6 +340,12 @@ fn jwt_payload(token: &str) -> Option<Value> {
 /// Decode a JWT's `exp` (unix seconds) without verifying the signature.
 pub fn jwt_exp(token: &str) -> Option<i64> {
     jwt_payload(token)?.get("exp").and_then(|x| x.as_i64())
+}
+
+/// Decode the `userRegion` claim from a session JWT (no signature check). Used
+/// to auto-select the correct cloud data-center host.
+pub fn jwt_user_region(token: &str) -> Option<i64> {
+    jwt_payload(token)?.get("userRegion").and_then(|x| x.as_i64())
 }
 
 /// If `token` looks like an Insta360 **session** token (a JWT whose payload
@@ -401,10 +447,19 @@ fn parse_media(v: &Value) -> Option<Media> {
         &["mediaSize", "downOriginalSize", "fileSize", "file_size"],
     )
     .unwrap_or(0);
-    // Times are unix milliseconds in this API (e.g. createTime 1787429512249).
+    // Capture time. Prefer `shootTime` (when the footage was recorded) over
+    // `createTime`/upload time, so date filtering matches the clip's real date
+    // (and the filename), not when it happened to sync to the cloud. Values are
+    // unix milliseconds (e.g. 1787429512249).
     let time = as_u64(
         v,
-        &["createTime", "mediaTime", "create_time", "upload_time_s"],
+        &[
+            "shootTime",
+            "mediaTime",
+            "createTime",
+            "create_time",
+            "upload_time_s",
+        ],
     )
     .map(|u| {
         if u > 1_000_000_000_000 {

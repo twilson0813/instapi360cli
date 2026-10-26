@@ -1,0 +1,11 @@
+instapi360
+Copyright 2026 instapi360 contributors
+
+This product includes software originally developed by Markus Mayer as
+"instapi360" (https://github.com/sunsided/instapi360), used under the terms of
+the MIT and Apache-2.0 licenses.
+
+This project is an independent continuation. Modified files carry changes
+described in CHANGES.md, including: correct per-region cloud host and client
+platform selection, shoot-date range filtering, a dry-run size estimate,
+oldest-first download ordering, and an interactive bash UI.

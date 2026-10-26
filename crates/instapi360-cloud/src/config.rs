@@ -4,38 +4,70 @@
 
 use std::fmt;
 
-/// Cloud environment / region. The base host is region-selected; this user's
-/// desktop `startup.ini` reported `current_area=OverSea` →
-/// `HOST_OPENAPI_INSTA360=openapi-g.insta360.com`.
+/// Cloud data region.
+///
+/// The account/app API lives on a single global host (`openapi-g.insta360.com`
+/// for OverSea), but the **cloud media** API (`/cloud/service/*`) is served from
+/// a *data-center-specific* `service-*` host, and a request only succeeds on the
+/// host that owns the account's data — the others reject with
+/// `403 "没有权益"` ("no entitlement"). The correct host is selected by the
+/// account's data region, which the session JWT carries as `userRegion` and the
+/// subscription API returns as `userRegion: "US"` etc.
+///
+/// Verified mappings (captured from Insta360 Studio 6.0.6, macOS):
+/// - US / Americas  → `service-va.insta360.com`   (Virginia); media CDN
+///   `cloud-media-vaf.insta360.com`.
+/// - EU / OverSea   → `service-fra.insta360.com`  (Frankfurt).
+/// - APAC/Singapore → `service-sg.insta360.com`.
+/// - Mainland China → `service.insta360.com`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Region {
-    /// Global / OverSea: `openapi-g.insta360.com`.
+    /// US / Americas (`service-va`). The JWT's `userRegion: 2` maps here.
     #[default]
-    Global,
-    /// Mainland China: `openapi.insta360.com`.
+    Us,
+    /// EU / OverSea (`service-fra`).
+    Eu,
+    /// APAC / Singapore (`service-sg`).
+    Apac,
+    /// Mainland China (`service.insta360.com`).
     Cn,
-    /// Test environment: `openapi-test.insta360.com`.
+    /// Test environment.
     Test,
 }
 
 impl Region {
-    /// Base origin for the **account/app** API (`/account/*`, `/app/*`).
-    pub fn openapi_base(self) -> &'static str {
-        match self {
-            Region::Global => "https://openapi-g.insta360.com",
-            Region::Cn => "https://openapi.insta360.com",
-            Region::Test => "https://openapi-test.insta360.com",
+    /// Map the session JWT's `userRegion` integer to a [`Region`].
+    ///
+    /// Observed: `2` = US (this account, served from `service-va`). Other codes
+    /// are mapped on a best-effort basis and can be overridden by the caller.
+    pub fn from_user_region(code: i64) -> Option<Region> {
+        match code {
+            2 => Some(Region::Us),
+            1 => Some(Region::Eu),
+            3 => Some(Region::Apac),
+            0 => Some(Region::Cn),
+            _ => None,
         }
     }
 
-    /// Base origin for the **cloud media** API (`/cloud/service/*`). This is a
-    /// different host from the account API — verified: list/download 404 on
-    /// openapi-g but serve from the regional `service-*` host.
+    /// Base origin for the **account/app** API (`/account/*`, `/app/*`). This is
+    /// a single global host for all OverSea regions; only CN differs.
+    pub fn openapi_base(self) -> &'static str {
+        match self {
+            Region::Cn => "https://openapi.insta360.com",
+            Region::Test => "https://openapi-test.insta360.com",
+            // US/EU/APAC all use the global account host.
+            _ => "https://openapi-g.insta360.com",
+        }
+    }
+
+    /// Base origin for the **cloud media** API (`/cloud/service/*`) — the
+    /// data-center host that owns the account's media.
     pub fn cloud_base(self) -> &'static str {
         match self {
-            // "fra" = Frankfurt (OverSea/EU). Other regions' hosts differ; this
-            // is the confirmed Global one.
-            Region::Global => "https://service-fra.insta360.com",
+            Region::Us => "https://service-va.insta360.com",
+            Region::Eu => "https://service-fra.insta360.com",
+            Region::Apac => "https://service-sg.insta360.com",
             Region::Cn => "https://service.insta360.com",
             Region::Test => "https://service-test.insta360.com",
         }
@@ -55,17 +87,39 @@ impl Region {
 /// build sends `android`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Platform {
+    /// Insta360 Studio on macOS — sends `pc/mac`.
+    Mac,
+    /// Insta360 Studio on Windows — sends `pc/windows`.
     Windows,
+    /// Mobile app — sends `android`.
     Android,
 }
 
 impl Platform {
-    /// Value for `x-insta360-platform`. The desktop app sends `pc/windows`
-    /// (verbatim from captured requests), not just `windows`.
+    /// Value for `x-insta360-platform`. The cloud media API validates this
+    /// against the host: `service-va` only accepts the desktop values
+    /// (`pc/mac` / `pc/windows`) and rejects `web`/`ios`/`android` with
+    /// `code -2 "缺少正确的头部参数"` ("missing correct header parameter").
     pub fn header_value(self) -> &'static str {
         match self {
+            Platform::Mac => "pc/mac",
             Platform::Windows => "pc/windows",
             Platform::Android => "android",
+        }
+    }
+
+    /// The platform matching the current build's OS. Picking this by target OS
+    /// matters: the media API ties `x-insta360-platform` to a desktop client,
+    /// so a macOS host must present `pc/mac`.
+    pub fn current() -> Platform {
+        if cfg!(target_os = "macos") {
+            Platform::Mac
+        } else if cfg!(target_os = "windows") {
+            Platform::Windows
+        } else {
+            // Linux and others: present as the Windows desktop client, which the
+            // media API accepts.
+            Platform::Windows
         }
     }
 }
@@ -107,16 +161,24 @@ pub struct ClientConfig {
 }
 
 impl ClientConfig {
-    /// A skeleton config for the desktop (`windows`) client. Identity/signing
-    /// fields are left blank and must be filled from capture before signed
-    /// endpoints will work; token-import + download of already-signed OSS URLs
-    /// works without them.
-    pub fn windows(region: Region) -> Self {
+    /// Config for a desktop Studio client on the given `platform`.
+    ///
+    /// Identity values (`app_version`, `app_traffic`, `user_agent`) mirror the
+    /// live Studio 6.0.6 requests captured from the macOS client. Request
+    /// signing is **not** used by the account/media/download endpoints — the
+    /// session token alone authenticates — so `app_key`/`sign_key` stay blank
+    /// (only the share-link endpoints HMAC-sign).
+    pub fn for_platform(region: Region, platform: Platform) -> Self {
+        let app_id = match platform {
+            Platform::Mac => "studio_mac",
+            Platform::Windows => "studio_win",
+            Platform::Android => "android",
+        };
         ClientConfig {
             region,
-            platform: Platform::Windows,
-            app_version: "6.0.2".to_string(),
-            app_id: "studio_win".to_string(),
+            platform,
+            app_version: "6.0.6".to_string(),
+            app_id: app_id.to_string(),
             app_traffic: "release".to_string(),
             client_id: String::new(),
             app_key: String::new(),
@@ -125,6 +187,16 @@ impl ClientConfig {
             sign_key: String::new(),
             user_agent: "insta360/studio".to_string(),
         }
+    }
+
+    /// Config for the macOS Studio client (`pc/mac`).
+    pub fn mac(region: Region) -> Self {
+        Self::for_platform(region, Platform::Mac)
+    }
+
+    /// Config for the Windows Studio client (`pc/windows`).
+    pub fn windows(region: Region) -> Self {
+        Self::for_platform(region, Platform::Windows)
     }
 
     /// True once the fields required to sign an API request are populated.

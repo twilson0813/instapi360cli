@@ -7,11 +7,14 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-authors = ["Markus Mayer <widemeadows@gmail.com>"]
+authors = [
+    "Markus Mayer <widemeadows@gmail.com>",
+    "twilson0813 <twilson0813@users.noreply.github.com>",
+]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/sunsided/instapi360"
-homepage = "https://github.com/sunsided/instapi360"
+repository = "https://github.com/twilson0813/instapi360cli"
+homepage = "https://github.com/twilson0813/instapi360cli"
 readme = "README.md"
 keywords = ["insta360", "cloud", "camera", "video", "download"]
 rust-version = "1.82"

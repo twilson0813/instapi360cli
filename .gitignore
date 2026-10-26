@@ -7,5 +7,7 @@ footage/
 # personal session handoff (machine-specific paths)
 RESUME.md
 
-# reverse-engineering helpers kept local, not published
-/tools/
+# Captured traffic from reverse-engineering — may contain tokens/PII, never commit.
+/tools/insta360_flows.txt
+/tools/*.flow
+/tools/*.har

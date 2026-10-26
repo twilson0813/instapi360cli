@@ -29,19 +29,47 @@ impl AppConfig {
     }
 }
 
-/// Best-effort detect the host's primary MAC as a MAC-format equipment code.
-/// Any stable value is accepted by the API; this avoids hardcoding a real one.
+/// Best-effort detect the host's primary MAC as a MAC-format equipment code
+/// (`AA:BB:CC:DD:EE:FF`). Any stable value is accepted by the API; this avoids
+/// hardcoding a real one. Tries Linux sysfs first, then `ifconfig` (macOS/BSD).
 pub fn detect_equipment_code() -> Option<String> {
+    detect_from_sysfs().or_else(detect_from_ifconfig)
+}
+
+/// Linux: read MACs from `/sys/class/net/*/address`.
+fn detect_from_sysfs() -> Option<String> {
     let iface_dir = std::fs::read_dir("/sys/class/net").ok()?;
     let mut macs: Vec<String> = iface_dir
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name() != "lo")
         .filter_map(|e| std::fs::read_to_string(e.path().join("address")).ok())
         .map(|s| s.trim().to_uppercase())
-        .filter(|m| m.len() == 17 && m != "00:00:00:00:00:00")
+        .filter(|m| is_usable_mac(m))
         .collect();
     macs.sort();
     macs.into_iter().next()
+}
+
+/// macOS / BSD: parse `ifconfig` output for `ether` lines.
+fn detect_from_ifconfig() -> Option<String> {
+    let out = std::process::Command::new("ifconfig").output().ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut macs: Vec<String> = text
+        .lines()
+        .filter_map(|l| {
+            let l = l.trim();
+            l.strip_prefix("ether ")
+                .map(|rest| rest.trim().to_uppercase())
+        })
+        .filter(|m| is_usable_mac(m))
+        .collect();
+    macs.sort();
+    macs.into_iter().next()
+}
+
+/// A plausible, non-null MAC string `AA:BB:CC:DD:EE:FF`.
+fn is_usable_mac(m: &str) -> bool {
+    m.len() == 17 && m != "00:00:00:00:00:00"
 }
 
 /// Stores the session as JSON under the user's config dir.

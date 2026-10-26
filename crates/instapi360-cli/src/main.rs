@@ -28,13 +28,18 @@ use tokio::io::BufWriter;
     about = "List and download original media from the Insta360 cloud"
 )]
 struct Cli {
-    /// Cloud region.
-    #[arg(long, value_enum, default_value = "global", global = true)]
+    /// Cloud data region. `auto` (default) picks it from the token's
+    /// `userRegion`. Override only if detection is wrong.
+    #[arg(long, value_enum, default_value = "auto", global = true)]
     region: RegionArg,
 
     /// Override the per-install equipment code (X-Equipment-Code).
     #[arg(long, env = "INSTA360_EQUIPMENT_CODE", global = true)]
     equipment_code: Option<String>,
+
+    /// Verbose: log every API request (URL + headers) and raw response body.
+    #[arg(short, long, global = true)]
+    verbose: bool,
 
     #[command(subcommand)]
     cmd: Command,
@@ -42,17 +47,31 @@ struct Cli {
 
 #[derive(Copy, Clone, clap::ValueEnum)]
 enum RegionArg {
-    Global,
+    /// Detect the region from the stored token's `userRegion`.
+    Auto,
+    /// US / Americas (`service-va`).
+    Us,
+    /// EU / OverSea (`service-fra`).
+    Eu,
+    /// APAC / Singapore (`service-sg`).
+    Apac,
     Cn,
     Test,
 }
 
-impl From<RegionArg> for Region {
-    fn from(r: RegionArg) -> Self {
-        match r {
-            RegionArg::Global => Region::Global,
+impl RegionArg {
+    /// Resolve to a concrete [`Region`], using the session token for `Auto`.
+    fn resolve(self, session: Option<&Session>) -> Region {
+        match self {
+            RegionArg::Us => Region::Us,
+            RegionArg::Eu => Region::Eu,
+            RegionArg::Apac => Region::Apac,
             RegionArg::Cn => Region::Cn,
             RegionArg::Test => Region::Test,
+            RegionArg::Auto => session
+                .and_then(|s| instapi360_cloud::jwt_user_region(&s.user_token))
+                .and_then(Region::from_user_region)
+                .unwrap_or_default(),
         }
     }
 }
@@ -83,6 +102,13 @@ enum Command {
         /// Fetch and print all pages, not just the first.
         #[arg(long)]
         all: bool,
+        /// Only items captured on/after this date. Accepts `YYYY-MM-DD` or a
+        /// relative age like `7d`, `12h`, `3w`.
+        #[arg(long)]
+        since: Option<String>,
+        /// Only items captured on/before this date (`YYYY-MM-DD` or relative).
+        #[arg(long)]
+        until: Option<String>,
     },
     /// Download directly from a resolved CDN resourceKey URL (bypasses the API).
     /// Useful today: paste a SOURCE_URL from the app's download.db.
@@ -106,7 +132,106 @@ enum Command {
         /// Resume partial files instead of re-downloading.
         #[arg(long)]
         resume: bool,
+        /// With `all`: only items captured on/after this date (`YYYY-MM-DD` or
+        /// a relative age like `7d`, `12h`, `3w`).
+        #[arg(long)]
+        since: Option<String>,
+        /// With `all`: only items captured on/before this date.
+        #[arg(long)]
+        until: Option<String>,
+        /// List what would be downloaded (with per-item size) and the total,
+        /// without downloading anything.
+        #[arg(long)]
+        dry_run: bool,
     },
+}
+
+/// An inclusive capture-time window in unix seconds; `None` ends are open.
+#[derive(Clone, Copy, Default)]
+struct DateRange {
+    since: Option<i64>,
+    until: Option<i64>,
+}
+
+impl DateRange {
+    /// Parse `--since`/`--until` strings into a range. Accepts absolute
+    /// `YYYY-MM-DD` (interpreted in UTC; `since` = start of day, `until` = end
+    /// of day so the day is inclusive) or a relative age `<n>[hdw]` meaning "n
+    /// hours/days/weeks ago".
+    fn parse(since: &Option<String>, until: &Option<String>) -> Result<DateRange> {
+        Ok(DateRange {
+            since: since
+                .as_deref()
+                .map(|s| parse_when(s, false))
+                .transpose()?,
+            until: until.as_deref().map(|s| parse_when(s, true)).transpose()?,
+        })
+    }
+
+    fn is_open(&self) -> bool {
+        self.since.is_none() && self.until.is_none()
+    }
+
+    /// Whether a media item's capture time falls in the window. Items with no
+    /// known time are kept only when the range is open.
+    fn contains(&self, time_unix: Option<i64>) -> bool {
+        match time_unix {
+            Some(t) => self.since.map(|s| t >= s).unwrap_or(true)
+                && self.until.map(|u| t <= u).unwrap_or(true),
+            None => self.is_open(),
+        }
+    }
+
+    fn describe(&self) -> String {
+        let f = |t: i64| {
+            time::OffsetDateTime::from_unix_timestamp(t)
+                .ok()
+                .and_then(|d| {
+                    d.format(&time::format_description::well_known::Rfc3339)
+                        .ok()
+                })
+                .unwrap_or_else(|| t.to_string())
+        };
+        match (self.since, self.until) {
+            (Some(s), Some(u)) => format!("{} … {}", f(s), f(u)),
+            (Some(s), None) => format!("since {}", f(s)),
+            (None, Some(u)) => format!("until {}", f(u)),
+            (None, None) => "all dates".to_string(),
+        }
+    }
+}
+
+/// Parse one date expression to unix seconds. `end_of_day` extends a bare
+/// `YYYY-MM-DD` to 23:59:59 so an `--until` day is inclusive.
+fn parse_when(s: &str, end_of_day: bool) -> Result<i64> {
+    let s = s.trim();
+    // Relative age: <n>[h|d|w].
+    if let Some(secs) = parse_relative(s) {
+        return Ok(now_unix() - secs);
+    }
+    // Absolute YYYY-MM-DD (UTC).
+    let fmt = time::macros::format_description!("[year]-[month]-[day]");
+    let date = time::Date::parse(s, &fmt)
+        .with_context(|| format!("invalid date '{s}': use YYYY-MM-DD or a relative age like 7d"))?;
+    let t = if end_of_day {
+        time::Time::from_hms(23, 59, 59).unwrap()
+    } else {
+        time::Time::MIDNIGHT
+    };
+    Ok(date.with_time(t).assume_utc().unix_timestamp())
+}
+
+/// `30d` → seconds in 30 days, `12h`, `3w`. Returns `None` if not this shape.
+fn parse_relative(s: &str) -> Option<i64> {
+    let (num, unit) = s.split_at(s.find(|c: char| !c.is_ascii_digit())?);
+    let n: i64 = num.parse().ok()?;
+    let mult = match unit {
+        "h" => 3600,
+        "d" => 86_400,
+        "w" => 604_800,
+        _ => return None,
+    };
+    Some(n * mult)
 }
 
 fn config_dir() -> Result<PathBuf> {
@@ -115,11 +240,20 @@ fn config_dir() -> Result<PathBuf> {
     Ok(pd.config_dir().to_path_buf())
 }
 
-fn build_config(cli: &Cli, equipment_code: String) -> ClientConfig {
-    let mut cfg = ClientConfig::windows(cli.region.into());
-    cfg.platform = Platform::Windows;
+fn build_config(region: Region, equipment_code: String) -> ClientConfig {
+    // Platform is picked by the host OS: the media API ties
+    // `x-insta360-platform` to a desktop client (`pc/mac` on macOS), and a
+    // mismatched value is rejected before the request is even considered.
+    let mut cfg = ClientConfig::for_platform(region, Platform::current());
     cfg.equipment_code = equipment_code;
     cfg
+}
+
+/// Build a client for the resolved region, given the stored session (used to
+/// auto-detect region from the token's `userRegion` when `--region auto`).
+fn build_client(cli: &Cli, equipment_code: String, session: Option<&Session>) -> Result<Client> {
+    let region = cli.region.resolve(session);
+    Client::new(build_config(region, equipment_code)).context("building client")
 }
 
 /// Resolve the equipment code: explicit flag/env wins (and is persisted);
@@ -198,19 +332,29 @@ async fn ensure_fresh(client: &Client, store: &FileSessionStore) -> Result<Sessi
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    let default_filter = if cli.verbose {
+        "instapi360=debug,instapi360_cloud=debug"
+    } else {
+        "instapi360=info"
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "instapi360=info".into()),
+                .unwrap_or_else(|_| default_filter.into()),
         )
         .with_writer(std::io::stderr)
         .init();
 
-    let cli = Cli::parse();
     let dir = config_dir()?;
     let store = FileSessionStore::new(dir.join("session.json"));
     let equipment_code = resolve_equipment_code(&cli, &dir.join("config.json"));
-    let client = Client::new(build_config(&cli, equipment_code)).context("building client")?;
+    // Build the client against the region implied by the stored token (so
+    // `--region auto` points at the right data center). Commands that don't
+    // need a session (e.g. import-token) tolerate its absence.
+    let existing = store.load().ok().flatten();
+    let client = build_client(&cli, equipment_code, existing.as_ref())?;
 
     match &cli.cmd {
         Command::ImportToken {
@@ -267,7 +411,16 @@ async fn main() -> Result<()> {
             );
         }
 
-        Command::List { count, all } => {
+        Command::List {
+            count,
+            all,
+            since,
+            until,
+        } => {
+            let range = DateRange::parse(since, until)?;
+            if !range.is_open() {
+                eprintln!("filtering: {}", range.describe());
+            }
             let session = ensure_fresh(&client, &store).await?;
             let mut cursor = PageCursor::first(*count);
             let mut shown = 0u64;
@@ -277,10 +430,14 @@ async fn main() -> Result<()> {
                     .await
                     .context("listing media")?;
                 for m in &page.items {
+                    if !range.contains(m.time_unix) {
+                        continue;
+                    }
                     shown += 1;
                     println!(
-                        "{:<28}  {:>12}  {:>2} part(s)  {}",
+                        "{:<28}  {:>10}  {:>12}  {:>2} part(s)  {}",
                         m.id,
+                        fmt_date(m.time_unix),
                         human_size(m.size_original),
                         m.parts.len().max(1),
                         m.name
@@ -361,28 +518,71 @@ async fn main() -> Result<()> {
             target,
             out,
             resume,
+            since,
+            until,
+            dry_run,
         } => {
+            let range = DateRange::parse(since, until)?;
             let session = ensure_fresh(&client, &store).await?;
-            let ids: Vec<MediaId> = if target == "all" {
+
+            // Collect the target items. For `all`, page the whole library and
+            // apply the date filter; otherwise a single id (date filter N/A).
+            let items: Vec<(MediaId, Option<i64>, u64, String)> = if target == "all" {
+                if !range.is_open() {
+                    eprintln!("filtering: {}", range.describe());
+                }
                 let mut cursor = PageCursor::first(100);
                 let mut acc = Vec::new();
                 loop {
                     let page = client.list_media(&session, cursor.clone()).await?;
                     let next = page.next.clone();
-                    acc.extend(page.items.into_iter().map(|m| m.id));
+                    for m in page.items {
+                        if range.contains(m.time_unix) {
+                            acc.push((m.id, m.time_unix, m.size_original, m.name));
+                        }
+                    }
                     match next {
                         Some(n) => cursor = n,
                         None => break,
                     }
                 }
+                // Download oldest → newest by shoot time so a long `all` run
+                // fills in chronologically. Items with no known time sort last.
+                acc.sort_by_key(|(_, t, _, _)| t.unwrap_or(i64::MAX));
                 acc
             } else {
-                vec![MediaId(target.clone())]
+                vec![(MediaId(target.clone()), None, 0, target.clone())]
             };
+
+            eprintln!("{} item(s) match", items.len());
+
+            if *dry_run {
+                // Resolve each item's real size so the total is accurate, then
+                // print without downloading.
+                let mut total: u64 = 0;
+                for (id, time, _sz, name) in &items {
+                    let parts = client.resolve_download(&session, id).await.ok();
+                    let size: u64 = parts
+                        .as_ref()
+                        .map(|p| p.iter().map(|x| x.size).sum())
+                        .unwrap_or(0);
+                    total += size;
+                    println!(
+                        "{:<28}  {:>10}  {:>12}  {}",
+                        id,
+                        fmt_date(*time),
+                        human_size(size),
+                        name
+                    );
+                }
+                println!("\nTotal: {} across {} item(s)", human_size(total), items.len());
+                eprintln!("(dry run — nothing downloaded)");
+                return Ok(());
+            }
 
             tokio::fs::create_dir_all(out).await?;
             let mp = MultiProgress::new();
-            for id in ids {
+            for (id, _time, _sz, _name) in items {
                 download_one(&client, &session, &id, out, *resume, &mp)
                     .await
                     .with_context(|| format!("downloading {id}"))?;
@@ -452,6 +652,20 @@ async fn download_one(
     }
     println!("Saved {} part(s) to {}", parts.len(), asset_dir.display());
     Ok(())
+}
+
+/// Format a unix-second capture time as `YYYY-MM-DD` (UTC), or `?` if unknown.
+fn fmt_date(time_unix: Option<i64>) -> String {
+    match time_unix {
+        Some(t) => time::OffsetDateTime::from_unix_timestamp(t)
+            .ok()
+            .and_then(|d| {
+                let fmt = time::macros::format_description!("[year]-[month]-[day]");
+                d.format(&fmt).ok()
+            })
+            .unwrap_or_else(|| "?".to_string()),
+        None => "?".to_string(),
+    }
 }
 
 fn human_size(bytes: u64) -> String {

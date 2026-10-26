@@ -122,7 +122,7 @@ mod tests {
     use super::*;
 
     fn cfg_with(app_key: &str, sign_key: &str) -> ClientConfig {
-        let mut c = ClientConfig::windows(crate::config::Region::Global);
+        let mut c = ClientConfig::windows(crate::config::Region::Us);
         c.app_key = app_key.to_string();
         c.sign_key = sign_key.to_string();
         c
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn unconfigured_signer_refuses() {
-        let signer = Signer::new(&ClientConfig::windows(crate::config::Region::Global));
+        let signer = Signer::new(&ClientConfig::windows(crate::config::Region::Us));
         assert!(!signer.is_ready());
         assert!(signer.sign("abc", "123").is_err());
     }

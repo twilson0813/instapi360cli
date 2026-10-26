@@ -20,7 +20,7 @@
 //! ```no_run
 //! # async fn run() -> instapi360_cloud::Result<()> {
 //! use instapi360_cloud::{Client, ClientConfig, Region, Session, PageCursor};
-//! let client = Client::new(ClientConfig::windows(Region::Global))?;
+//! let client = Client::new(ClientConfig::mac(Region::Us))?;
 //! let session = Session::from_token("<captured X-User-Token>");
 //! let page = client.list_media(&session, PageCursor::first(50)).await?;
 //! for m in &page.items {
@@ -37,7 +37,7 @@ mod model;
 mod session;
 mod signing;
 
-pub use client::{jwt_exp, session_token_exp, Client};
+pub use client::{jwt_exp, jwt_user_region, session_token_exp, Client};
 pub use config::{ClientConfig, Platform, Region};
 pub use download::ProgressSink;
 pub use error::{Error, Result};
