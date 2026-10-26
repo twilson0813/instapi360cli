@@ -1,15 +1,16 @@
 #!/usr/bin/env bash
 #
-# instapi360-ui — a small interactive menu over the `instapi360` CLI.
+# insta360cli-ui — a small interactive menu over the `insta360cli` CLI.
 #
 # Drives the common workflows without memorizing flags: check who you are,
 # list your cloud media, filter by a shoot-date range, estimate the download
 # size, and download (with resume) to a folder or a mounted Samba share.
 #
-# Usage:  ./instapi360-ui.sh
+# Usage:  ./insta360cli-ui.sh
 #
-# It locates the `instapi360` binary from PATH, or falls back to ~/instapi360
-# or ~/.cargo/bin/instapi360. Set INSTAPI360_BIN to override.
+# It locates the `insta360cli` binary from PATH, or falls back to common spots
+# (next to this script, ~/insta360cli, ~/.cargo/bin, …). The older `instapi360`
+# name is still accepted. Set INSTA360CLI_BIN to override.
 
 set -u
 
@@ -21,45 +22,50 @@ pause() { read -r -p "Press Enter to continue… " _; }
 
 # ---- locate the binary -------------------------------------------------------
 # An executable *file* (not a directory that merely has the search bit set —
-# a project folder named `instapi360` would otherwise be picked by mistake).
+# a project folder sharing the binary's name would otherwise be picked).
 is_exe() { [[ -f "$1" && -x "$1" ]]; }
 
 # Directory this script lives in (so a binary sitting next to the UI is found).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" >/dev/null 2>&1 && pwd)"
 
 find_bin() {
-    # 1) explicit override wins.
-    if [[ -n "${INSTAPI360_BIN:-}" ]] && is_exe "${INSTAPI360_BIN}"; then
-        echo "${INSTAPI360_BIN}"; return 0
+    # 1) explicit override wins (new var, then legacy).
+    local override="${INSTA360CLI_BIN:-${INSTAPI360_BIN:-}}"
+    if [[ -n "$override" ]] && is_exe "$override"; then
+        echo "$override"; return 0
     fi
-    # 2) on PATH.
-    if command -v instapi360 >/dev/null 2>&1; then
-        command -v instapi360; return 0
-    fi
-    # 3) common standalone locations, in priority order.
-    local cand
-    for cand in \
-        "$SCRIPT_DIR/instapi360" \
-        "$PWD/instapi360" \
-        "$HOME/.cargo/bin/instapi360" \
-        "$HOME/instapi360/instapi360" \
-        "$HOME/instapi360/target/release/instapi360" \
-        "$HOME/instapi360.bin" \
-        "$HOME/bin/instapi360" \
-        "$HOME/instapi360"; do
-        is_exe "$cand" && { echo "$cand"; return 0; }
+    # 2) on PATH — current name, then legacy.
+    local name
+    for name in insta360cli instapi360; do
+        if command -v "$name" >/dev/null 2>&1; then
+            command -v "$name"; return 0
+        fi
+    done
+    # 3) common standalone locations, for each name, in priority order.
+    local base cand
+    for name in insta360cli instapi360; do
+        for base in \
+            "$SCRIPT_DIR" \
+            "$PWD" \
+            "$HOME/.cargo/bin" \
+            "$HOME/$name" \
+            "$HOME/$name/target/release" \
+            "$HOME/bin"; do
+            cand="$base/$name"
+            is_exe "$cand" && { echo "$cand"; return 0; }
+        done
     done
     return 1
 }
 
 BIN="$(find_bin)" || {
-    err "Could not find the 'instapi360' binary."
+    err "Could not find the 'insta360cli' binary."
     echo "Looked on PATH and in: this script's folder, \$PWD, ~/.cargo/bin," >&2
-    echo "~/instapi360[/target/release], ~/instapi360.bin, ~/bin." >&2
+    echo "~/insta360cli[/target/release], ~/bin (and the legacy 'instapi360' name)." >&2
     echo >&2
     echo "Fix: point the UI at your standalone binary, e.g.:" >&2
-    echo "    INSTAPI360_BIN=\$HOME/instapi360-cli ./instapi360-ui" >&2
-    echo "or drop the binary next to this script and name it 'instapi360'." >&2
+    echo "    INSTA360CLI_BIN=\$HOME/insta360cli ./insta360cli-ui" >&2
+    echo "or drop the binary next to this script and name it 'insta360cli'." >&2
     exit 1
 }
 
@@ -67,7 +73,7 @@ BIN="$(find_bin)" || {
 SINCE=""
 UNTIL=""
 # Default output directory.
-OUTDIR="${INSTAPI360_OUT:-$HOME/Insta360}"
+OUTDIR="${INSTA360CLI_OUT:-${INSTAPI360_OUT:-$HOME/Insta360}}"
 
 range_label() {
     if [[ -z "$SINCE" && -z "$UNTIL" ]]; then echo "all dates"
@@ -155,7 +161,7 @@ import_token() {
 menu() {
     # Only clear the screen on a real terminal, so piped/non-TTY runs stay readable.
     [[ -t 1 ]] && clear
-    bold "instapi360  —  $BIN"
+    bold "insta360cli  —  $BIN"
     dim  "Range: $(range_label)    Output: $OUTDIR"
     echo
     echo "  1) Who am I"

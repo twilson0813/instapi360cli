@@ -13,7 +13,7 @@ description = "Command-line tool to list and download your own original Insta360
 categories = ["command-line-utilities", "multimedia::video"]
 
 [[bin]]
-name = "instapi360"
+name = "insta360cli"
 path = "src/main.rs"
 
 [features]

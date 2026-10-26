@@ -56,7 +56,7 @@ the session token's `userRegion` claim.
 
 ## New: interactive bash UI
 
-- `tools/instapi360-ui.sh` — a menu wrapper over the CLI (whoami, list, set
+- `tools/insta360cli-ui.sh` — a menu wrapper over the CLI (whoami, list, set
   date range, set output dir, dry-run estimate, download with resume, import
   token). Locates the binary on `PATH`, next to itself, or via `INSTAPI360_BIN`.
 

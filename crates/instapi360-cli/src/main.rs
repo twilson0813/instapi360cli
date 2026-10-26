@@ -23,7 +23,7 @@ use tokio::io::BufWriter;
 
 #[derive(Parser)]
 #[command(
-    name = "instapi360",
+    name = "insta360cli",
     version,
     about = "List and download original media from the Insta360 cloud"
 )]
@@ -281,7 +281,7 @@ fn resolve_equipment_code(cli: &Cli, cfg_path: &std::path::Path) -> String {
 fn load_session(store: &FileSessionStore) -> Result<Session> {
     store
         .load()?
-        .ok_or_else(|| anyhow!("no session — run `instapi360 import-token <TOKEN>` first"))
+        .ok_or_else(|| anyhow!("no session — run `insta360cli import-token <TOKEN>` first"))
 }
 
 /// Seconds before expiry at which we proactively renew (3 days).
@@ -335,9 +335,9 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let default_filter = if cli.verbose {
-        "instapi360=debug,instapi360_cloud=debug"
+        "insta360cli=debug,instapi360_cli=debug,instapi360_cloud=debug"
     } else {
-        "instapi360=info"
+        "insta360cli=info,instapi360_cli=info"
     };
     tracing_subscriber::fmt()
         .with_env_filter(

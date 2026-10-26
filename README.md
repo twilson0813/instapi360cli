@@ -1,6 +1,6 @@
-# instapi360
+# insta360cli
 
-A small Rust library (`instapi360-cloud`) and CLI (`instapi360`) to access **your
+A small Rust library (`instapi360-cloud`) and CLI (`insta360cli`) to access **your
 own** Insta360 cloud media from the command line: sign in with your existing
 session, list your uploads, and download the **original** camera files
 (360 `.insv` + `.lrv` proxy, flat `.mp4`) for local editing and archival.
@@ -27,7 +27,7 @@ session, list your uploads, and download the **original** camera files
 | crate | role |
 |-------|------|
 | `instapi360-cloud` | Async client library: auth, list, resolve, download. rustls-only, I/O injected by the caller (portable, no filesystem assumptions in the core). |
-| `instapi360-cli`   | The `instapi360` binary over the library. |
+| `instapi360-cli`   | The `insta360cli` binary over the library. |
 
 ## Build & test
 ```sh
@@ -40,18 +40,18 @@ cargo run -p instapi360-cli -- --help
 ```sh
 # 1a. interactive login — opens a browser, you sign in (and solve any captcha),
 #     the token is captured automatically  (needs Chrome/Chromium)
-instapi360 login
+insta360cli login
 # 1b. …or paste a token you already have
-instapi360 import-token "<session-token>"
+insta360cli import-token "<session-token>"
 
 # 2. use it — equipment code auto-detects your host and is remembered
-instapi360 whoami
-instapi360 list --all
-instapi360 download <mediaId> --out ./footage      # grabs all parts (.insv + .lrv)
-instapi360 download all --out ./footage --resume
+insta360cli whoami
+insta360cli list --all
+insta360cli download <mediaId> --out ./footage      # grabs all parts (.insv + .lrv)
+insta360cli download all --out ./footage --resume
 
 # 3. keep the session alive headlessly (no re-login)
-instapi360 refresh        # or let commands auto-renew when near expiry
+insta360cli refresh        # or let commands auto-renew when near expiry
 ```
 
 ## Date-range filtering
@@ -63,14 +63,14 @@ upload time). Dates are `YYYY-MM-DD` (UTC, inclusive) or a relative age:
 
 ```sh
 # everything shot in October 2026
-instapi360 list --all --since 2026-10-01 --until 2026-10-31
+insta360cli list --all --since 2026-10-01 --until 2026-10-31
 
 # download a single day's footage to a Samba share
-instapi360 download all --out /Volumes/Share/Insta360 --resume \
+insta360cli download all --out /Volumes/Share/Insta360 --resume \
   --since 2026-08-30 --until 2026-08-30
 
 # everything from the last two weeks
-instapi360 download all --out ./footage --resume --since 2w
+insta360cli download all --out ./footage --resume --since 2w
 ```
 
 `download all` downloads **oldest → newest** by shoot time, so a long run fills
@@ -81,24 +81,25 @@ in chronologically.
 (resolved from the API), without downloading anything — handy for sizing a share:
 
 ```sh
-instapi360 download all --since 2026-08-30 --until 2026-08-30 --dry-run --out ./x
+insta360cli download all --since 2026-08-30 --until 2026-08-30 --dry-run --out ./x
 # …
 # Total: 94.7 GB across 10 item(s)
 ```
 
 ## Interactive menu (bash UI)
 
-For a point-and-pick workflow, `instapi360-ui` wraps the CLI with a menu:
+For a point-and-pick workflow, `insta360cli-ui` wraps the CLI with a menu:
 who-am-I, list, set a date range, set the output directory (local or a mounted
 Samba share), estimate size (dry run), and download with resume.
 
 ```sh
-instapi360-ui
+insta360cli-ui
 ```
 
-It finds the `instapi360` binary on `PATH`, or at `~/instapi360` /
-`~/.cargo/bin/instapi360`; override with `INSTAPI360_BIN=/path/to/instapi360`.
-Set a default output dir with `INSTAPI360_OUT=/Volumes/Share/Insta360`.
+It finds the `insta360cli` binary on `PATH`, next to the script, or at
+`~/.cargo/bin/insta360cli`; override with `INSTA360CLI_BIN=/path/to/insta360cli`.
+Set a default output dir with `INSTA360CLI_OUT=/Volumes/Share/Insta360`.
+(The legacy `instapi360` binary name is still accepted.)
 
 The `login` command is behind the **`login`** cargo feature, **on by default**.
 It pulls a Chrome-automation dependency; for a lean, token-import-only build:
@@ -111,7 +112,7 @@ the rest of the CLI needs no browser).
 
 ### Browser login (recommended)
 ```sh
-instapi360 login
+insta360cli login
 ```
 1. A **fresh** Chrome window opens on the Insta360 sign-in page. It uses a
    throwaway profile (removed afterwards), so it won't collide with a Chrome you
@@ -128,12 +129,12 @@ you enter your own credentials directly into Insta360's page.
 If you already have a session token (e.g. from a build without the `login`
 feature), store it directly:
 ```sh
-instapi360 import-token "<session-token>"
+insta360cli import-token "<session-token>"
 ```
 
 ### Staying signed in
 The token lasts ~30 days and **renews itself**: `whoami`, `list` and `download`
-auto-renew it when it's within a few days of expiring, and `instapi360 refresh`
+auto-renew it when it's within a few days of expiring, and `insta360cli refresh`
 renews on demand. So `login` is a once-in-a-while action, not per-use.
 
 ### Where the session is stored
@@ -150,12 +151,12 @@ Delete that file to sign out.
   *not* usually a subscription problem.
 - **`list`/`download` find nothing for a date range** — filtering is by
   `shootTime`; confirm you actually have footage in that range with
-  `instapi360 list --all` (dates are shown per item). A `--dry-run` also lists
+  `insta360cli list --all` (dates are shown per item). A `--dry-run` also lists
   exactly what matches.
-- **`command not found: instapi360`** after installing — your shell cached the
+- **`command not found: insta360cli`** after installing — your shell cached the
   miss; run `hash -r` or open a new terminal.
 - **`is a directory` from the bash UI** — point it at the binary explicitly:
-  `INSTAPI360_BIN=/path/to/instapi360 ./instapi360-ui`.
+  `INSTA360CLI_BIN=/path/to/insta360cli ./insta360cli-ui`.
 - **`oneshot canceled` / no window** — usually an outdated Chrome-automation
   stack against a very new Chrome. Update the toolchain (`cargo update`) and
   ensure Chrome/Chromium is current.
@@ -220,4 +221,4 @@ can be embedded in other apps — desktop or mobile — not just this CLI.
 Licensed under either of MIT or Apache-2.0 at your option.
 
 ## Naming
-`instapi360` is a working name and may change; it is not an official product name.
+`insta360cli` is a working name and may change; it is not an official product name.
