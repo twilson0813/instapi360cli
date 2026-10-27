@@ -150,10 +150,19 @@ do_download() {
 
 import_token() {
     bold "Import session token"
-    dim  "Paste the 'insta_access_token' value from your browser cookie on cloud.insta360.com"
-    read -r -p "Token: " tok
-    [[ -z "$tok" ]] && { echo "No token entered."; echo; pause; return; }
-    "$BIN" import-token "$tok" && echo "Stored." || err "import failed"
+    echo "How to get it:"
+    dim  "  1. Sign in at https://cloud.insta360.com in your browser"
+    dim  "  2. DevTools (F12) → Application → Cookies → cloud.insta360.com"
+    dim  "  3. Copy the value of the 'insta_access_token' cookie"
+    echo
+    read -r -p "Paste token (blank to cancel): " tok
+    [[ -z "$tok" ]] && { echo "Cancelled."; echo; pause; return; }
+    if "$BIN" import-token "$tok"; then
+        echo "Stored. Verifying…"
+        "$BIN" whoami
+    else
+        err "import failed — check you copied the whole token value"
+    fi
     echo; pause
 }
 

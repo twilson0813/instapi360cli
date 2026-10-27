@@ -49,6 +49,16 @@ the session token's `userRegion` claim.
   size and a grand total, without downloading — useful for sizing a target
   (e.g. a Samba share) before a large pull.
 
+## Resilience: retry + continue-on-error
+
+- Each file part is retried up to 6 times, resuming from the bytes already on
+  disk, with exponential backoff. Transient network failures (e.g. `Connection
+  reset by peer`) no longer abort a download; an expired signed URL (403)
+  triggers a re-resolve before the next attempt.
+- `download all` records items that still fail after retries and continues with
+  the rest, printing a summary at the end instead of aborting the whole batch.
+  Re-running skips already-complete files.
+
 ## Behaviour: oldest → newest
 
 - `download all` now downloads in ascending shoot-time order, so a long run

@@ -393,9 +393,13 @@ async fn main() -> Result<()> {
             #[cfg(not(feature = "login"))]
             {
                 return Err(anyhow!(
-                    "this build was compiled without the `login` feature. Rebuild with \
-                     it enabled, or use `import-token` — the sign-in endpoint is \
-                     reCAPTCHA-gated so login needs a real browser."
+                    "This is the lean (no-browser) build, so there is no `login` \
+                     command. Sign in by importing your session token instead:\n\n  \
+                     1. Sign in at https://cloud.insta360.com in your browser\n  \
+                     2. Open DevTools → Application → Cookies → cloud.insta360.com\n  \
+                     3. Copy the value of the `insta_access_token` cookie\n  \
+                     4. Run:  insta360cli import-token \"<that value>\"\n\n\
+                     The token auto-renews, so this is a once-in-a-while step."
                 ));
             }
         }
@@ -582,16 +586,38 @@ async fn main() -> Result<()> {
 
             tokio::fs::create_dir_all(out).await?;
             let mp = MultiProgress::new();
-            for (id, _time, _sz, _name) in items {
-                download_one(&client, &session, &id, out, *resume, &mp)
-                    .await
-                    .with_context(|| format!("downloading {id}"))?;
+            let batch = target == "all";
+            let total = items.len();
+            let mut failed: Vec<(MediaId, String)> = Vec::new();
+            for (n, (id, _time, _sz, _name)) in items.into_iter().enumerate() {
+                match download_one(&client, &session, &id, out, *resume, &mp).await {
+                    Ok(()) => {}
+                    Err(e) => {
+                        // In a single-item download, fail hard. In `all`, record
+                        // and keep going so one bad item can't abort the batch.
+                        if !batch {
+                            return Err(e).with_context(|| format!("downloading {id}"));
+                        }
+                        eprintln!("[{}/{total}] skipping {id}: {e:#}", n + 1);
+                        failed.push((id, format!("{e:#}")));
+                    }
+                }
+            }
+            if !failed.is_empty() {
+                eprintln!("\n{} item(s) failed after retries:", failed.len());
+                for (id, why) in &failed {
+                    eprintln!("  {id}  —  {why}");
+                }
+                eprintln!("Re-run the same command to retry just these (completed files are skipped).");
             }
         }
     }
 
     Ok(())
 }
+
+/// Max attempts per file part before giving up (each resumes from bytes on disk).
+const MAX_PART_ATTEMPTS: u32 = 6;
 
 async fn download_one(
     client: &Client,
@@ -601,26 +627,15 @@ async fn download_one(
     resume: bool,
     mp: &MultiProgress,
 ) -> Result<()> {
-    let parts = client.resolve_download(session, id).await?;
+    let mut parts = client.resolve_download(session, id).await?;
     // One logical asset -> its own subdirectory, so multi-part clips stay grouped.
     let asset_dir = out.join(sanitize(&id.0));
     tokio::fs::create_dir_all(&asset_dir).await?;
 
-    for part in &parts {
-        let dest = asset_dir.join(sanitize(&part.file_name));
-        let from = if resume {
-            tokio::fs::metadata(&dest)
-                .await
-                .map(|m| m.len())
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        if from > 0 && part.size > 0 && from >= part.size {
-            continue; // already complete
-        }
+    for idx in 0..parts.len() {
+        let dest = asset_dir.join(sanitize(&parts[idx].file_name));
 
-        let pb = mp.add(ProgressBar::new(part.size.max(1)));
+        let pb = mp.add(ProgressBar::new(parts[idx].size.max(1)));
         pb.set_style(
             ProgressStyle::with_template(
                 "{msg:<32} [{bar:32}] {bytes:>10}/{total_bytes:<10} {bytes_per_sec}",
@@ -628,26 +643,70 @@ async fn download_one(
             .unwrap()
             .progress_chars("=>-"),
         );
-        pb.set_message(part.file_name.clone());
-        pb.set_position(from);
+        pb.set_message(parts[idx].file_name.clone());
 
-        let file = tokio::fs::OpenOptions::new()
-            .create(true)
-            .write(true)
-            .append(from > 0)
-            .truncate(from == 0)
-            .open(&dest)
-            .await?;
-        let writer = BufWriter::new(file);
+        // Retry loop: resume from whatever is already on disk. On a transient
+        // network error we back off and retry; on an expired OSS URL (403) we
+        // re-resolve to get fresh signed URLs, then continue from the same
+        // offset. The partial file on disk is the durable checkpoint.
+        let mut attempt = 0u32;
+        loop {
+            // Always resume from the current on-disk length (even when `resume`
+            // is false, a mid-download retry must continue, not truncate).
+            let on_disk = tokio::fs::metadata(&dest).await.map(|m| m.len()).unwrap_or(0);
+            let from = if attempt == 0 && !resume { 0 } else { on_disk };
 
-        client
-            .download_part(part, writer, from, |done, total| {
-                if let Some(t) = total {
-                    pb.set_length(t);
+            if parts[idx].size > 0 && from >= parts[idx].size {
+                break; // already complete
+            }
+            pb.set_position(from);
+
+            let file = tokio::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(from > 0)
+                .truncate(from == 0)
+                .open(&dest)
+                .await?;
+            let writer = BufWriter::new(file);
+
+            let res = client
+                .download_part(&parts[idx], writer, from, |done, total| {
+                    if let Some(t) = total {
+                        pb.set_length(t);
+                    }
+                    pb.set_position(done);
+                })
+                .await;
+
+            match res {
+                Ok(()) => break,
+                Err(e) => {
+                    attempt += 1;
+                    if attempt >= MAX_PART_ATTEMPTS {
+                        pb.abandon_with_message(format!("{} — failed", parts[idx].file_name));
+                        return Err(e).with_context(|| {
+                            format!("part {} after {attempt} attempts", parts[idx].file_name)
+                        });
+                    }
+                    // Expired signed URL -> re-resolve the whole asset's URLs.
+                    if e.is_auth() {
+                        if let Ok(fresh) = client.resolve_download(session, id).await {
+                            if fresh.len() == parts.len() {
+                                parts = fresh;
+                            }
+                        }
+                    }
+                    let backoff = std::time::Duration::from_secs(2u64.pow(attempt.min(4)));
+                    pb.set_message(format!(
+                        "{} — retry {attempt}/{MAX_PART_ATTEMPTS} in {}s",
+                        parts[idx].file_name,
+                        backoff.as_secs()
+                    ));
+                    tokio::time::sleep(backoff).await;
                 }
-                pb.set_position(done);
-            })
-            .await?;
+            }
+        }
         pb.finish();
     }
     println!("Saved {} part(s) to {}", parts.len(), asset_dir.display());

@@ -107,30 +107,27 @@ It pulls a Chrome-automation dependency; for a lean, token-import-only build:
 
 ## Signing in
 
-**Requirement:** Chrome or Chromium installed (used only for the login window;
-the rest of the CLI needs no browser).
+### Token import (recommended, no browser needed)
+The sign-in page is reCAPTCHA-gated, but once you're signed in on the web the
+session token sits in a cookie you can copy:
 
-### Browser login (recommended)
-```sh
-insta360cli login
-```
-1. A **fresh** Chrome window opens on the Insta360 sign-in page. It uses a
-   throwaway profile (removed afterwards), so it won't collide with a Chrome you
-   already have running — and you sign in from scratch in this window.
-2. Sign in with your account, solving any reCAPTCHA challenge that appears.
-3. Once you're signed in, the CLI reads the session token from the page and
-   stores it at `~/.config/instapi360/session.json`, then closes the browser.
-   You'll see: `Logged in — token stored … (expires in 30 days)`.
+1. Sign in at <https://cloud.insta360.com> in your browser.
+2. Open DevTools (F12) → **Application → Cookies → `cloud.insta360.com`**.
+3. Copy the value of the **`insta_access_token`** cookie.
+4. Store it:
+   ```sh
+   insta360cli import-token "<that value>"
+   ```
 
-The window waits up to 5 minutes for you to finish. Nothing is typed for you —
-you enter your own credentials directly into Insta360's page.
+That's it — `whoami`/`list`/`download` work immediately, and the token
+auto-renews, so this is a once-in-a-while step. This path needs no browser and
+is the only one in the lean (`--no-default-features`) build.
 
-### Manual token import (no browser)
-If you already have a session token (e.g. from a build without the `login`
-feature), store it directly:
-```sh
-insta360cli import-token "<session-token>"
-```
+### Browser login (optional, needs the `login` feature + Chrome)
+The default build also offers `insta360cli login`, which opens a real Chrome
+window for you to sign in; the token is then captured and stored. It requires
+Chrome/Chromium and the `login` cargo feature (on by default). The lean build
+omits it — use token import above.
 
 ### Staying signed in
 The token lasts ~30 days and **renews itself**: `whoami`, `list` and `download`
