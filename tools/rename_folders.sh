@@ -59,17 +59,30 @@ renamed=0; skipped=0; conflicts=0
 for d in "$DIR"/*/; do
     d="${d%/}"
     base="$(basename "$d")"
-    # only all-digit (mediaId) folders
-    [[ "$base" =~ ^[0-9]+$ ]] || continue
+
+    # Which legacy form is this?
+    #  - all-digit: a mediaId folder (derive name from media file inside)
+    #  - *-Original: an earlier stem+suffix folder (derive name from folder name)
+    newname=""
+    if [[ "$base" =~ ^[0-9]+$ ]]; then
+        src="$(find "$d" -maxdepth 1 -type f \( -iname '*.insv' -o -iname '*.insp' -o -iname '*.mp4' \) | head -1)"
+        [[ -z "$src" ]] && { echo "SKIP  $base  (no media file inside)"; skipped=$((skipped+1)); continue; }
+        newname="$(stem "$src")"
+        [[ -z "$newname" ]] && { echo "SKIP  $base  (unrecognized: $(basename "$src"))"; skipped=$((skipped+1)); continue; }
+    elif [[ "$base" == *-Original ]]; then
+        # strip the -Original suffix, then reduce to the capture stem
+        newname="$(stem "${base%-Original}")"
+        [[ -z "$newname" ]] && { echo "SKIP  $base  (unrecognized -Original name)"; skipped=$((skipped+1)); continue; }
+    else
+        continue   # already stem-named or unrelated
+    fi
+
     # only folders at/older than the cutoff
     if [[ "$d" -nt "$REF" ]]; then
         skipped=$((skipped+1)); continue
     fi
-    # find a media file inside to derive the name
-    src="$(find "$d" -maxdepth 1 -type f \( -iname '*.insv' -o -iname '*.insp' -o -iname '*.mp4' \) | head -1)"
-    [[ -z "$src" ]] && { echo "SKIP  $base  (no media file inside)"; skipped=$((skipped+1)); continue; }
-    newname="$(stem "$src")"
-    [[ -z "$newname" ]] && { echo "SKIP  $base  (unrecognized name: $(basename "$src"))"; skipped=$((skipped+1)); continue; }
+    # no-op if it already has the target name
+    [[ "$base" == "$newname" ]] && { skipped=$((skipped+1)); continue; }
     target="$DIR/$newname"
     if [[ -e "$target" ]]; then
         echo "CONFLICT  $base -> $newname  (target exists, leaving as-is)"
