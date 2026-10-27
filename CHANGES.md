@@ -66,6 +66,10 @@ the session token's `userRegion` claim.
 
 ## New: interactive bash UI
 
+- Download folders are named by the capture stem `PREFIX_<date>_<time>`
+  (e.g. `VID_20261016_140222`), derived from the media name with the lens/
+  chapter suffix and extension dropped — stable across single- and
+  multi-chapter clips, and readable by date/time. Falls back to the mediaId.
 - `tools/insta360cli-ui.sh` — a menu wrapper over the CLI (whoami, list, set
   date range, set output dir, dry-run estimate, download with resume, import
   token). Locates the binary on `PATH`, next to itself, or via `INSTAPI360_BIN`.

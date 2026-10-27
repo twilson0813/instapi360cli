@@ -727,26 +727,58 @@ async fn download_one(
     Ok(())
 }
 
-/// Studio-style asset folder name: the media base name (extension stripped)
-/// plus an `-Original` suffix, e.g. `VID_20261016_140222_00_001-Original`.
-/// Falls back to the mediaId when no usable name is available.
+/// Asset folder name derived from the media name: the capture stem
+/// `PREFIX_<date>_<time>` with the trailing lens/chapter suffix and extension
+/// dropped, e.g. `VID_20261016_140222_00_001.insv` -> `VID_20261016_140222`.
+/// This stays stable across single- and multi-chapter clips and reads by
+/// date/time. Falls back to the whole name (ext stripped), then the mediaId.
 fn asset_folder_name(id: &MediaId, name: Option<&str>) -> String {
-    let base = name
-        .map(|n| n.trim())
-        .filter(|n| !n.is_empty())
-        .map(|n| {
-            // Strip a known media extension if present.
-            let lower = n.to_ascii_lowercase();
-            for ext in [".insv", ".insp", ".mp4", ".jpg", ".dng", ".lrv"] {
-                if lower.ends_with(ext) {
-                    return n[..n.len() - ext.len()].to_string();
-                }
-            }
-            n.to_string()
-        })
+    let cleaned = name.map(|n| n.trim()).filter(|n| !n.is_empty());
+    let folder = cleaned
+        .and_then(capture_stem)
+        .or_else(|| cleaned.map(strip_media_ext))
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| id.0.clone());
-    sanitize(&format!("{base}-Original"))
+    sanitize(&folder)
+}
+
+/// Strip a known media extension (case-insensitive) from a filename.
+fn strip_media_ext(n: &str) -> String {
+    let lower = n.to_ascii_lowercase();
+    for ext in [".insv", ".insp", ".mp4", ".jpg", ".jpeg", ".dng", ".lrv"] {
+        if lower.ends_with(ext) {
+            return n[..n.len() - ext.len()].to_string();
+        }
+    }
+    n.to_string()
+}
+
+/// Extract the `PREFIX_YYYYMMDD_HHMMSS` capture stem from a camera filename
+/// like `VID_20261016_140222_00_001.insv` or `IMG_20260101_000000_00_001.insp`.
+/// Returns `None` if the name doesn't match that shape.
+fn capture_stem(n: &str) -> Option<String> {
+    let parts: Vec<&str> = n.split('_').collect();
+    // Need at least PREFIX, date, time (e.g. VID / 20261016 / 140222 ...).
+    if parts.len() < 3 {
+        return None;
+    }
+    let prefix = parts[0];
+    let date = parts[1];
+    // time segment may carry the extension if there's no lens suffix, e.g.
+    // "VID_20261016_140222.insv" -> time piece "140222.insv".
+    let time_raw = parts[2];
+    let time = time_raw.split('.').next().unwrap_or(time_raw);
+    let is_digits = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit());
+    if prefix.chars().all(|c| c.is_ascii_alphabetic())
+        && date.len() == 8
+        && is_digits(date)
+        && time.len() == 6
+        && is_digits(time)
+    {
+        Some(format!("{prefix}_{date}_{time}"))
+    } else {
+        None
+    }
 }
 
 /// Format a unix-second capture time as `YYYY-MM-DD` (UTC), or `?` if unknown.
@@ -788,4 +820,25 @@ fn sanitize(name: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod name_tests {
+    use super::*;
+
+    #[test]
+    fn folder_names() {
+        let id = MediaId("123".into());
+        let f = |n: Option<&str>| asset_folder_name(&id, n);
+        assert_eq!(f(Some("VID_20260421_211837_00_003.insv")), "VID_20260421_211837");
+        assert_eq!(f(Some("VID_20261016_140222_00_001.insv")), "VID_20261016_140222");
+        assert_eq!(f(Some("IMG_20260101_000000_00_001.insp")), "IMG_20260101_000000");
+        // no lens suffix, ext directly after time
+        assert_eq!(f(Some("VID_20260101_120000.mp4")), "VID_20260101_120000");
+        // unrecognized shape -> ext stripped, whole name kept
+        assert_eq!(f(Some("weird-name.insv")), "weird-name");
+        // empty / missing -> mediaId
+        assert_eq!(f(None), "123");
+        assert_eq!(f(Some("   ")), "123");
+    }
 }
