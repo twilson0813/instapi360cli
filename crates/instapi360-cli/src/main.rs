@@ -555,7 +555,16 @@ async fn main() -> Result<()> {
                 acc.sort_by_key(|(_, t, _, _)| t.unwrap_or(i64::MAX));
                 acc
             } else {
-                vec![(MediaId(target.clone()), None, 0, target.clone())]
+                // Single id: look up the media name so the folder matches Studio
+                // (best-effort — fall back to the id if detail is unavailable).
+                let id = MediaId(target.clone());
+                let name = client
+                    .media_detail(&session, &id)
+                    .await
+                    .ok()
+                    .map(|m| m.name)
+                    .unwrap_or_default();
+                vec![(id, None, 0, name)]
             };
 
             eprintln!("{} item(s) match", items.len());
@@ -589,8 +598,9 @@ async fn main() -> Result<()> {
             let batch = target == "all";
             let total = items.len();
             let mut failed: Vec<(MediaId, String)> = Vec::new();
-            for (n, (id, _time, _sz, _name)) in items.into_iter().enumerate() {
-                match download_one(&client, &session, &id, out, *resume, &mp).await {
+            for (n, (id, _time, _sz, name)) in items.into_iter().enumerate() {
+                let name_opt = (!name.is_empty()).then_some(name.as_str());
+                match download_one(&client, &session, &id, name_opt, out, *resume, &mp).await {
                     Ok(()) => {}
                     Err(e) => {
                         // In a single-item download, fail hard. In `all`, record
@@ -623,13 +633,17 @@ async fn download_one(
     client: &Client,
     session: &Session,
     id: &MediaId,
+    name: Option<&str>,
     out: &std::path::Path,
     resume: bool,
     mp: &MultiProgress,
 ) -> Result<()> {
     let mut parts = client.resolve_download(session, id).await?;
-    // One logical asset -> its own subdirectory, so multi-part clips stay grouped.
-    let asset_dir = out.join(sanitize(&id.0));
+    // One logical asset -> its own subdirectory, so multi-part clips stay
+    // grouped. Name it like Insta360 Studio does: the media's base name with an
+    // `-Original` suffix (e.g. `VID_20261016_140222_00_001-Original`). Fall back
+    // to the mediaId when the name is unknown (e.g. a bare `download <id>`).
+    let asset_dir = out.join(asset_folder_name(id, name));
     tokio::fs::create_dir_all(&asset_dir).await?;
 
     for idx in 0..parts.len() {
@@ -711,6 +725,28 @@ async fn download_one(
     }
     println!("Saved {} part(s) to {}", parts.len(), asset_dir.display());
     Ok(())
+}
+
+/// Studio-style asset folder name: the media base name (extension stripped)
+/// plus an `-Original` suffix, e.g. `VID_20261016_140222_00_001-Original`.
+/// Falls back to the mediaId when no usable name is available.
+fn asset_folder_name(id: &MediaId, name: Option<&str>) -> String {
+    let base = name
+        .map(|n| n.trim())
+        .filter(|n| !n.is_empty())
+        .map(|n| {
+            // Strip a known media extension if present.
+            let lower = n.to_ascii_lowercase();
+            for ext in [".insv", ".insp", ".mp4", ".jpg", ".dng", ".lrv"] {
+                if lower.ends_with(ext) {
+                    return n[..n.len() - ext.len()].to_string();
+                }
+            }
+            n.to_string()
+        })
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| id.0.clone());
+    sanitize(&format!("{base}-Original"))
 }
 
 /// Format a unix-second capture time as `YYYY-MM-DD` (UTC), or `?` if unknown.
