@@ -1,4 +1,4 @@
-//! # instapi360-cloud
+//! # insta360cli-cloud
 //!
 //! Async, platform-agnostic client for the Insta360 cloud: authenticate, list
 //! cloud media, and download **original** camera files (Ace Pro 2 `.insv`/
@@ -18,8 +18,8 @@
 //!
 //! ## Quick start
 //! ```no_run
-//! # async fn run() -> instapi360_cloud::Result<()> {
-//! use instapi360_cloud::{Client, ClientConfig, Region, Session, PageCursor};
+//! # async fn run() -> insta360cli_cloud::Result<()> {
+//! use insta360cli_cloud::{Client, ClientConfig, Region, Session, PageCursor};
 //! let client = Client::new(ClientConfig::mac(Region::Us))?;
 //! let session = Session::from_token("<captured X-User-Token>");
 //! let page = client.list_media(&session, PageCursor::first(50)).await?;

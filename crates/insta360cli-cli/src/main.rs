@@ -1,4 +1,4 @@
-//! `instapi360` — CLI over `instapi360-cloud`: import a session token, inspect the
+//! `insta360cli` — CLI over `insta360cli-cloud`: import a session token, inspect the
 //! account, list cloud media, and download originals.
 //!
 //! Session model: import a token once (from the app you're signed into), then
@@ -15,7 +15,7 @@ use anyhow::{anyhow, Context, Result};
 use clap::{Parser, Subcommand};
 use directories::ProjectDirs;
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
-use instapi360_cloud::{
+use insta360cli_cloud::{
     Client, ClientConfig, MediaId, PageCursor, Platform, Region, Session, SessionStore,
 };
 use store::{AppConfig, FileSessionStore};
@@ -69,7 +69,7 @@ impl RegionArg {
             RegionArg::Cn => Region::Cn,
             RegionArg::Test => Region::Test,
             RegionArg::Auto => session
-                .and_then(|s| instapi360_cloud::jwt_user_region(&s.user_token))
+                .and_then(|s| insta360cli_cloud::jwt_user_region(&s.user_token))
                 .and_then(Region::from_user_region)
                 .unwrap_or_default(),
         }
@@ -126,9 +126,10 @@ enum Command {
     Download {
         /// A `mediaId`, or the literal `all`.
         target: String,
-        /// Output directory.
-        #[arg(long, default_value = "./footage")]
-        out: PathBuf,
+        /// Output directory. If omitted, the last-used directory is reused
+        /// (falling back to ./footage). When given, it is remembered.
+        #[arg(long)]
+        out: Option<PathBuf>,
         /// Resume partial files instead of re-downloading.
         #[arg(long)]
         resume: bool,
@@ -235,9 +236,42 @@ fn parse_relative(s: &str) -> Option<i64> {
 }
 
 fn config_dir() -> Result<PathBuf> {
-    let pd = ProjectDirs::from("com", "instapi360", "instapi360")
+    let pd = ProjectDirs::from("com", "insta360cli", "insta360cli")
         .ok_or_else(|| anyhow!("cannot determine config directory"))?;
-    Ok(pd.config_dir().to_path_buf())
+    let new_dir = pd.config_dir().to_path_buf();
+    migrate_legacy_config(&new_dir);
+    Ok(new_dir)
+}
+
+/// One-time migration from the former `instapi360` config dir so an existing
+/// stored session/token keeps working after the rename (no re-import needed).
+/// Only runs when the new dir has no session yet and the old one exists.
+fn migrate_legacy_config(new_dir: &std::path::Path) {
+    if new_dir.join("session.json").exists() {
+        return; // already set up under the new name
+    }
+    let Some(old) = ProjectDirs::from("com", "instapi360", "instapi360") else {
+        return;
+    };
+    let old_dir = old.config_dir();
+    if !old_dir.join("session.json").exists() {
+        return; // nothing to migrate
+    }
+    if std::fs::create_dir_all(new_dir).is_err() {
+        return;
+    }
+    for name in ["session.json", "config.json"] {
+        let src = old_dir.join(name);
+        let dst = new_dir.join(name);
+        if src.exists() && !dst.exists() {
+            let _ = std::fs::copy(&src, &dst);
+        }
+    }
+    eprintln!(
+        "migrated existing session from {} to {}",
+        old_dir.display(),
+        new_dir.display()
+    );
 }
 
 fn build_config(region: Region, equipment_code: String) -> ClientConfig {
@@ -276,6 +310,25 @@ fn resolve_equipment_code(cli: &Cli, cfg_path: &std::path::Path) -> String {
         let _ = app.save(cfg_path);
     }
     detected
+}
+
+/// Resolve the download output directory. An explicit `--out` wins and is
+/// persisted to the app config for next time; otherwise the saved directory is
+/// reused; otherwise it falls back to `./footage`.
+fn resolve_output_dir(explicit: Option<&std::path::Path>, cfg_path: &std::path::Path) -> PathBuf {
+    let mut app = AppConfig::load(cfg_path);
+    if let Some(p) = explicit {
+        let s = p.to_string_lossy().to_string();
+        if app.output_dir.as_deref() != Some(s.as_str()) {
+            app.output_dir = Some(s);
+            let _ = app.save(cfg_path);
+        }
+        return p.to_path_buf();
+    }
+    if let Some(saved) = app.output_dir {
+        return PathBuf::from(saved);
+    }
+    PathBuf::from("./footage")
 }
 
 fn load_session(store: &FileSessionStore) -> Result<Session> {
@@ -335,9 +388,9 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     let default_filter = if cli.verbose {
-        "insta360cli=debug,instapi360_cli=debug,instapi360_cloud=debug"
+        "insta360cli=debug,insta360cli_cli=debug,insta360cli_cloud=debug"
     } else {
-        "insta360cli=info,instapi360_cli=info"
+        "insta360cli=info,insta360cli_cli=info"
     };
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -355,6 +408,7 @@ async fn main() -> Result<()> {
     // need a session (e.g. import-token) tolerate its absence.
     let existing = store.load().ok().flatten();
     let client = build_client(&cli, equipment_code, existing.as_ref())?;
+    let cfg_path = dir.join("config.json");
 
     match &cli.cmd {
         Command::ImportToken {
@@ -363,7 +417,7 @@ async fn main() -> Result<()> {
         } => {
             let mut session = Session::from_token(token.trim());
             session.refresh_token = refresh_token.as_ref().map(|s| s.trim().to_string());
-            session.expires_at = instapi360_cloud::jwt_exp(&session.user_token);
+            session.expires_at = insta360cli_cloud::jwt_exp(&session.user_token);
             store.save(&session)?;
             println!(
                 "Token stored at {}{}",
@@ -456,7 +510,7 @@ async fn main() -> Result<()> {
         }
 
         Command::DownloadUrl { url, out, resume } => {
-            use instapi360_cloud::FilePart;
+            use insta360cli_cloud::FilePart;
             tokio::fs::create_dir_all(out).await?;
             let file_name = url
                 .split('?')
@@ -527,6 +581,10 @@ async fn main() -> Result<()> {
             dry_run,
         } => {
             let range = DateRange::parse(since, until)?;
+            // Resolve the output dir: explicit --out wins (and is remembered);
+            // else the last-used saved dir; else ./footage.
+            let out: PathBuf = resolve_output_dir(out.as_deref(), &cfg_path);
+            eprintln!("output: {}", out.display());
             let session = ensure_fresh(&client, &store).await?;
 
             // Collect the target items. For `all`, page the whole library and
@@ -593,14 +651,14 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            tokio::fs::create_dir_all(out).await?;
+            tokio::fs::create_dir_all(&out).await?;
             let mp = MultiProgress::new();
             let batch = target == "all";
             let total = items.len();
             let mut failed: Vec<(MediaId, String)> = Vec::new();
             for (n, (id, _time, _sz, name)) in items.into_iter().enumerate() {
                 let name_opt = (!name.is_empty()).then_some(name.as_str());
-                match download_one(&client, &session, &id, name_opt, out, *resume, &mp).await {
+                match download_one(&client, &session, &id, name_opt, &out, *resume, &mp).await {
                     Ok(()) => {}
                     Err(e) => {
                         // In a single-item download, fail hard. In `all`, record

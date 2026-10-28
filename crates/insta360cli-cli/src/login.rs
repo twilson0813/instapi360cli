@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use chromiumoxide::browser::{Browser, BrowserConfig};
 use chromiumoxide::Page;
 use futures::StreamExt;
-use instapi360_cloud::{session_token_exp, Session, SessionStore};
+use insta360cli_cloud::{session_token_exp, Session, SessionStore};
 
 use crate::store::FileSessionStore;
 
@@ -24,7 +24,7 @@ pub async fn run(store: &FileSessionStore) -> Result<()> {
     // Use an isolated, throwaway profile so we don't attach to (and get killed
     // by) an already-running Chrome instance. chromiumoxide already applies the
     // usual automation flags (no-first-run, disable-dev-shm-usage, …).
-    let user_data_dir = std::env::temp_dir().join(format!("instapi360-cdp-{}", std::process::id()));
+    let user_data_dir = std::env::temp_dir().join(format!("insta360cli-cdp-{}", std::process::id()));
     let config = BrowserConfig::builder()
         .with_head()
         .user_data_dir(&user_data_dir)

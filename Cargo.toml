@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/instapi360-cloud",
-    "crates/instapi360-cli",
+    "crates/insta360cli-cloud",
+    "crates/insta360cli-cli",
 ]
 
 [workspace.package]

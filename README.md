@@ -1,6 +1,6 @@
 # insta360cli
 
-A small Rust library (`instapi360-cloud`) and CLI (`insta360cli`) to access **your
+A small Rust library (`insta360cli-cloud`) and CLI (`insta360cli`) to access **your
 own** Insta360 cloud media from the command line: sign in with your existing
 session, list your uploads, and download the **original** camera files
 (360 `.insv` + `.lrv` proxy, flat `.mp4`) for local editing and archival.
@@ -26,14 +26,14 @@ session, list your uploads, and download the **original** camera files
 ## Workspace
 | crate | role |
 |-------|------|
-| `instapi360-cloud` | Async client library: auth, list, resolve, download. rustls-only, I/O injected by the caller (portable, no filesystem assumptions in the core). |
-| `instapi360-cli`   | The `insta360cli` binary over the library. |
+| `insta360cli-cloud` | Async client library: auth, list, resolve, download. rustls-only, I/O injected by the caller (portable, no filesystem assumptions in the core). |
+| `insta360cli-cli`   | The `insta360cli` binary over the library. |
 
 ## Build & test
 ```sh
 cargo build
-cargo test -p instapi360-cloud
-cargo run -p instapi360-cli -- --help
+cargo test -p insta360cli-cloud
+cargo run -p insta360cli-cli -- --help
 ```
 
 ## Usage
@@ -136,8 +136,11 @@ renews on demand. So `login` is a once-in-a-while action, not per-use.
 
 ### Where the session is stored
 The session JSON lives in your OS config dir:
-- macOS: `~/Library/Application Support/com.instapi360.instapi360/session.json`
-- Linux: `~/.config/instapi360/session.json`
+- macOS: `~/Library/Application Support/com.insta360cli.insta360cli/session.json`
+- Linux: `~/.config/insta360cli/session.json`
+
+(A session stored by the earlier `instapi360` name is migrated automatically on
+first run.)
 
 Delete that file to sign out.
 
@@ -207,7 +210,7 @@ not its cloud-upload time, so ranges line up with the clip filenames.
 may fall on the adjacent UTC day, so pad by a day if you need to be exact.
 
 ## Design
-`instapi360-cloud` is deliberately dependency-light and platform-agnostic
+`insta360cli-cloud` is deliberately dependency-light and platform-agnostic
 (`rustls`, caller-provided `AsyncWrite` sinks and a `SessionStore` trait) so it
 can be embedded in other apps — desktop or mobile — not just this CLI.
 

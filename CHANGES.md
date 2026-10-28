@@ -82,6 +82,15 @@ the session token's `userRegion` claim.
   session for reverse-engineering (redacts auth headers). Kept as a dev aid;
   the capture output it writes is git-ignored.
 
+## Rename to insta360cli
+
+Everything is now named `insta360cli`: the binary, both crates
+(`insta360cli-cloud`, `insta360cli-cli`), the crate directories, import paths
+(`insta360cli_cloud`), and the OS config dir (`com.insta360cli.insta360cli`).
+An existing session/config stored under the former `instapi360` config dir is
+migrated automatically on first run, so no token re-import is needed. The bash
+UI still accepts the legacy `instapi360` binary name when locating the CLI.
+
 ## Docs
 
 - README documents the region/platform model, the date semantics, the bash UI,

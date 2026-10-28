@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use instapi360_cloud::{Result as CloudResult, Session, SessionStore};
+use insta360cli_cloud::{Result as CloudResult, Session, SessionStore};
 use serde::{Deserialize, Serialize};
 
 /// Small persisted CLI config (non-secret), e.g. the equipment code so it need
@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 pub struct AppConfig {
     /// `X-Equipment-Code` to send (a MAC-format id).
     pub equipment_code: Option<String>,
+    /// Last-used download output directory, remembered so it need not be
+    /// re-entered. Set whenever `download --out <dir>` runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_dir: Option<String>,
 }
 
 impl AppConfig {

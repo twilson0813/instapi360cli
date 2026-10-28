@@ -794,7 +794,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "instapi360-cli"
+name = "insta360cli-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -803,7 +803,7 @@ dependencies = [
  "directories",
  "futures",
  "indicatif",
- "instapi360-cloud",
+ "insta360cli-cloud",
  "serde",
  "serde_json",
  "time",
@@ -813,7 +813,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "instapi360-cloud"
+name = "insta360cli-cloud"
 version = "0.1.0"
 dependencies = [
  "base64",

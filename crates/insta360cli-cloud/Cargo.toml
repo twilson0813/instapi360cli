@@ -1,5 +1,5 @@
 [package]
-name = "instapi360-cloud"
+name = "insta360cli-cloud"
 version.workspace = true
 authors.workspace = true
 edition.workspace = true
@@ -11,7 +11,7 @@ readme.workspace = true
 keywords.workspace = true
 description = "Async client library for the Insta360 cloud: list and download your own original camera media."
 categories = ["api-bindings", "multimedia::video"]
-documentation = "https://docs.rs/instapi360-cloud"
+documentation = "https://docs.rs/insta360cli-cloud"
 
 [dependencies]
 tokio = { workspace = true, features = ["rt", "io-util", "macros", "time"] }

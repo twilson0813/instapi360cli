@@ -72,8 +72,25 @@ BIN="$(find_bin)" || {
 # Current date-range selection (empty = all).
 SINCE=""
 UNTIL=""
-# Default output directory.
-OUTDIR="${INSTA360CLI_OUT:-${INSTAPI360_OUT:-$HOME/Insta360}}"
+
+# Read the last-used output dir the CLI saved (so it isn't re-entered). The CLI
+# stores it in config.json under its OS config dir.
+saved_output_dir() {
+    local cfg
+    for cfg in \
+        "$HOME/Library/Application Support/com.instapi360.instapi360/config.json" \
+        "$HOME/.config/instapi360/config.json"; do
+        if [[ -f "$cfg" ]]; then
+            # extract "output_dir": "…"  (no jq dependency)
+            sed -n 's/.*"output_dir"[[:space:]]*:[[:space:]]*"\(.*\)".*/\1/p' "$cfg" | head -1
+            return
+        fi
+    done
+}
+
+# Default output directory: env var > saved config > ~/Insta360.
+OUTDIR="${INSTA360CLI_OUT:-${INSTAPI360_OUT:-$(saved_output_dir)}}"
+[[ -z "$OUTDIR" ]] && OUTDIR="$HOME/Insta360"
 
 range_label() {
     if [[ -z "$SINCE" && -z "$UNTIL" ]]; then echo "all dates"
