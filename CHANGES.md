@@ -49,6 +49,14 @@ the session token's `userRegion` claim.
   size and a grand total, without downloading — useful for sizing a target
   (e.g. a Samba share) before a large pull.
 
+## Speed: parallel downloads
+
+- `download` gains `--concurrency N` (default 4): up to N media items download
+  at once via a bounded `buffer_unordered` runner. A single CDN connection is
+  typically rate-capped, so parallel items multiply aggregate throughput
+  (measured ~1.8x at 4 in testing). Per-item retry/resume and the end-of-run
+  failure summary are preserved. The bash UI exposes it (option 8 / `Parallel`).
+
 ## Resilience: retry + continue-on-error
 
 - Each file part is retried up to 6 times, resuming from the bytes already on

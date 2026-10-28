@@ -76,6 +76,20 @@ insta360cli download all --out ./footage --resume --since 2w
 `download all` downloads **oldest → newest** by shoot time, so a long run fills
 in chronologically.
 
+### Faster downloads (parallelism)
+A single CDN connection is usually rate-capped, so the biggest speedup is
+downloading several items at once with `--concurrency` (default `4`):
+
+```sh
+insta360cli download all --out /Volumes/Share/Insta360 --resume --concurrency 4
+```
+
+Raising it past ~4 often doesn't help — you hit a shared ceiling (CDN
+account-wide cap, your link, or the destination disk/share write speed), and
+too many parallel writes to a network share can even slow it down. Start at `4`
+and only raise it if aggregate throughput keeps climbing. Each item keeps its
+own progress bar, and per-file retry/resume still applies.
+
 ### Preview before a big pull
 `--dry-run` lists exactly what would download, with per-item and total size
 (resolved from the API), without downloading anything — handy for sizing a share:

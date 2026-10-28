@@ -133,6 +133,10 @@ enum Command {
         /// Resume partial files instead of re-downloading.
         #[arg(long)]
         resume: bool,
+        /// Download this many media items in parallel. Higher values help when
+        /// the CDN caps a single connection (often the case). Default 4.
+        #[arg(long, default_value_t = 4)]
+        concurrency: usize,
         /// With `all`: only items captured on/after this date (`YYYY-MM-DD` or
         /// a relative age like `7d`, `12h`, `3w`).
         #[arg(long)]
@@ -576,6 +580,7 @@ async fn main() -> Result<()> {
             target,
             out,
             resume,
+            concurrency,
             since,
             until,
             dry_run,
@@ -655,22 +660,54 @@ async fn main() -> Result<()> {
             let mp = MultiProgress::new();
             let batch = target == "all";
             let total = items.len();
-            let mut failed: Vec<(MediaId, String)> = Vec::new();
-            for (n, (id, _time, _sz, name)) in items.into_iter().enumerate() {
-                let name_opt = (!name.is_empty()).then_some(name.as_str());
-                match download_one(&client, &session, &id, name_opt, &out, *resume, &mp).await {
-                    Ok(()) => {}
-                    Err(e) => {
-                        // In a single-item download, fail hard. In `all`, record
-                        // and keep going so one bad item can't abort the batch.
-                        if !batch {
-                            return Err(e).with_context(|| format!("downloading {id}"));
-                        }
-                        eprintln!("[{}/{total}] skipping {id}: {e:#}", n + 1);
-                        failed.push((id, format!("{e:#}")));
+            // Run up to `concurrency` item downloads at once. A single CDN
+            // connection is typically rate-capped, so parallel items multiply
+            // aggregate throughput. Shared state is cheap to clone (Client) or
+            // wrapped in Arc (Session), and each item keeps its own progress bar.
+            let conc = (*concurrency).max(1);
+            let session = std::sync::Arc::new(session);
+            let out = std::sync::Arc::new(out);
+
+            use futures::stream::StreamExt;
+            let results: Vec<(MediaId, Result<()>)> = futures::stream::iter(items.into_iter())
+                .map(|(id, _time, _sz, name)| {
+                    let client = client.clone();
+                    let session = session.clone();
+                    let out = out.clone();
+                    let mp = mp.clone();
+                    let resume = *resume;
+                    async move {
+                        let name_opt = (!name.is_empty()).then_some(name.as_str());
+                        let r = download_one(
+                            &client,
+                            session.as_ref(),
+                            &id,
+                            name_opt,
+                            out.as_ref(),
+                            resume,
+                            &mp,
+                        )
+                        .await;
+                        (id, r)
                     }
+                })
+                .buffer_unordered(conc)
+                .collect()
+                .await;
+
+            let mut failed: Vec<(MediaId, String)> = Vec::new();
+            for (id, r) in results {
+                if let Err(e) = r {
+                    // In a single-item download, fail hard. In `all`, record and
+                    // keep going so one bad item can't fail the whole batch.
+                    if !batch {
+                        return Err(e).with_context(|| format!("downloading {id}"));
+                    }
+                    eprintln!("skipping {id}: {e:#}");
+                    failed.push((id, format!("{e:#}")));
                 }
             }
+            let _ = total;
             if !failed.is_empty() {
                 eprintln!("\n{} item(s) failed after retries:", failed.len());
                 for (id, why) in &failed {

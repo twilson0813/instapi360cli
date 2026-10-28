@@ -20,7 +20,7 @@ path = "src/main.rs"
 # Browser-assisted `login` — pulls a Chrome/CDP automation dependency. On by
 # default; build with `--no-default-features` for a lean, token-import-only CLI.
 default = ["login"]
-login = ["dep:chromiumoxide", "dep:futures"]
+login = ["dep:chromiumoxide"]
 
 [dependencies]
 insta360cli-cloud = { path = "../insta360cli-cloud", version = "0.1.0" }
@@ -34,7 +34,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+# Bounded-parallel downloads (buffer_unordered) and the login CDP stream.
+futures = { workspace = true }
 # Interactive login (feature = "login"): drive a real browser via CDP so the
 # user completes sign-in + any captcha, then read the session token back.
 chromiumoxide = { version = "0.9", default-features = false, optional = true }
-futures = { workspace = true, optional = true }

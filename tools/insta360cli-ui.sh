@@ -72,6 +72,8 @@ BIN="$(find_bin)" || {
 # Current date-range selection (empty = all).
 SINCE=""
 UNTIL=""
+# Parallel item downloads (helps when a single CDN connection is rate-capped).
+CONCURRENCY="${INSTA360CLI_CONCURRENCY:-4}"
 
 # Read the last-used output dir the CLI saved (so it isn't re-entered). The CLI
 # stores it in config.json under its OS config dir.
@@ -159,10 +161,19 @@ do_download() {
     esac
     mkdir -p "$OUTDIR" || { err "cannot create $OUTDIR"; pause; return; }
     # shellcheck disable=SC2046
-    "$BIN" download all --out "$OUTDIR" $(range_args) --resume \
+    "$BIN" download all --out "$OUTDIR" $(range_args) --resume --concurrency "$CONCURRENCY" \
         && bold "Done → $OUTDIR" \
         || err "download ended with an error (re-run to resume)"
     echo; pause
+}
+
+set_concurrency() {
+    bold "Set parallel downloads"
+    dim  "How many items to download at once. 4 is a good default; higher can help"
+    dim  "on a fast line, but too high may not add throughput (shared CDN cap)."
+    read -r -p "Concurrency [$CONCURRENCY]: " c
+    if [[ "$c" =~ ^[0-9]+$ && "$c" -ge 1 ]]; then CONCURRENCY="$c"; fi
+    echo "Concurrency: $CONCURRENCY"; echo; pause
 }
 
 import_token() {
@@ -188,7 +199,7 @@ menu() {
     # Only clear the screen on a real terminal, so piped/non-TTY runs stay readable.
     [[ -t 1 ]] && clear
     bold "insta360cli  —  $BIN"
-    dim  "Range: $(range_label)    Output: $OUTDIR"
+    dim  "Range: $(range_label)    Output: $OUTDIR    Parallel: $CONCURRENCY"
     echo
     echo "  1) Who am I"
     echo "  2) List media"
@@ -197,6 +208,7 @@ menu() {
     echo "  5) Estimate size (dry run)"
     echo "  6) Download matching media"
     echo "  7) Import session token"
+    echo "  8) Set parallel downloads"
     echo "  q) Quit"
     echo
     read -r -p "Choose: " choice
@@ -208,6 +220,7 @@ menu() {
         5) do_dry_run ;;
         6) do_download ;;
         7) import_token ;;
+        8) set_concurrency ;;
         q|Q) exit 0 ;;
         *) ;;
     esac
