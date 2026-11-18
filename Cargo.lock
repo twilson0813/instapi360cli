@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "insta360cli-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chromiumoxide",
@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "insta360cli-cloud"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64",
  "bytes",
